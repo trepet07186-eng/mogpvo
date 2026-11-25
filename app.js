@@ -668,3 +668,218 @@ renderAll();
     }
   };
 })();
+
+// === МОДУЛЬ НАВИГАЦИИ GPS, WAKE LOCK И ЗВУКОВЫХ ОПОВЕЩЕНИЙ ===
+(function initNavAndAlertsModule() {
+  let wakeLock = null;
+  let audioCtx = null;
+  let gpsWatchId = null;
+  let lastGpsSendTs = 0;
+  let lastOcrRouteTs = 0;
+  let lastOcrRoutePos = null;
+
+  // 1. Синтезатор короткого звукового сигнала ("бип") без внешних аудиофайлов
+  function playBeep(freq = 880, durationMs = 180) {
+    try {
+      if (!audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (Ctx) audioCtx = new Ctx();
+      }
+      if (!audioCtx) return;
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + durationMs / 1000);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durationMs / 1000);
+    } catch (e) {}
+  }
+  window.playAppBeep = playBeep;
+
+  // 2. Удержание экрана включенным (Wake Lock API)
+  async function requestWakeLock() {
+    try {
+      if ("wakeLock" in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      }
+    } catch (e) {}
+  }
+  document.addEventListener("click", () => {
+    requestWakeLock();
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) audioCtx = new Ctx();
+    }
+  }, { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") requestWakeLock();
+  });
+
+  // 3. Оптимизация перестроения маршрута (не чаще 1 раза в 5 сек и при сдвиге > 25 м)
+  const origUpdateRoadRoute = window.updateRoadRoute;
+  if (typeof origUpdateRoadRoute === "function") {
+    window.updateRoadRoute = async function(mog) {
+      const myId = getMyMogId();
+      if (!myId || myId !== mog.id || !mog.blue || !mog.green) {
+        return origUpdateRoadRoute(mog);
+      }
+      const distDirect = calcDistance(mog.blue.lat, mog.blue.lng, mog.green.lat, mog.green.lng);
+      // Фиксируем донесение о прибытии в точку "по плану" (<= 50 м)
+      if (distDirect <= 50) {
+        mog.arrivedTs = Date.now();
+        playBeep(1040, 220);
+        if (typeof hintText !== "undefined") {
+          hintText.textContent = "✅ Прибытие на позицию! Донесение отправлено командиру.";
+        }
+        return origUpdateRoadRoute(mog);
+      }
+      const now = Date.now();
+      const movedM = lastOcrRoutePos ? calcDistance(lastOcrRoutePos.lat, lastOcrRoutePos.lng, mog.blue.lat, mog.blue.lng) : 999;
+      if (now - lastOcrRouteTs < 5000 && movedM < 25 && window._cachedRouteCoords) {
+        routesLayer.clearLayers();
+        L.polyline(window._cachedRouteCoords, { color: "#4ade80", weight: 5, opacity: 0.85 }).addTo(routesLayer);
+        routeBanner.style.display = "block";
+        routeBanner.style.background = "rgba(20, 83, 45, 0.95)";
+        routeBanner.textContent = "🚙 МАРШ МОГ-" + mog.id + ": до точки ~" + Math.round(distDirect) + " м";
+        return;
+      }
+      lastOcrRouteTs = now;
+      lastOcrRoutePos = { lat: mog.blue.lat, lng: mog.blue.lng };
+      return origUpdateRoadRoute(mog);
+    };
+  }
+
+  // 4. Непрерывный GPS-навигатор для роли МОГ
+  function startGpsNavigation() {
+    if (gpsWatchId !== null || !navigator.geolocation) return;
+    gpsWatchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const myId = getMyMogId();
+        if (!myId) return;
+        const m = Reflect.get(mogsState, myId);
+        if (!m) return;
+        const newPt = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        const moved = m.blue ? calcDistance(m.blue.lat, m.blue.lng, newPt.lat, newPt.lng) : 999;
+        if (moved >= 5) {
+          m.blue = newPt;
+          renderAll();
+          if (Date.now() - lastGpsSendTs > 2500) {
+            lastGpsSendTs = Date.now();
+            broadcastState();
+          }
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+    );
+  }
+
+  function stopGpsNavigation() {
+    if (gpsWatchId !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(gpsWatchId);
+      gpsWatchId = null;
+    }
+  }
+
+  const roleEl = document.getElementById("roleSelect");
+  if (roleEl) {
+    roleEl.addEventListener("change", () => {
+      requestWakeLock();
+      if (getMyMogId()) startGpsNavigation();
+      else stopGpsNavigation();
+    });
+  }
+
+  // 5. Отслеживание событий для озвучивания (новая точка ПЛАН, новая цель, ЦУ, прибытие МОГ)
+  let prevPlanHash = "";
+  let prevTargetIds = new Set();
+  let prevAssignedHash = "";
+  let prevArrivedMap = {};
+
+  function getSnapshot() {
+    const myId = getMyMogId();
+    const myMog = myId ? Reflect.get(mogsState, myId) : null;
+    const planHash = (myMog && myMog.green) ? (myMog.green.lat.toFixed(5) + "," + myMog.green.lng.toFixed(5)) : "";
+    const tIds = new Set(targets.map((t) => t.id));
+    const asgHash = myId
+      ? targets.filter((t) => t.assignedMogId === myId).map((t) => t.id).sort().join(",")
+      : "";
+    return { planHash, tIds, asgHash };
+  }
+
+  // Перехватываем renderAll для мгновенного звукового оповещения при входящих изменениях
+  const origRenderAll = window.renderAll;
+  if (typeof origRenderAll === "function") {
+    window.renderAll = function() {
+      origRenderAll();
+      const snap = getSnapshot();
+      const myId = getMyMogId();
+
+      // Событие А: Появилась или изменилась точка "по плану" для МОГ
+      if (myId && snap.planHash && snap.planHash !== prevPlanHash) {
+        playBeep(880, 180);
+        if (typeof hintText !== "undefined") hintText.textContent = "📍 Получена новая плановая позиция (маршрут построен)!";
+      }
+      prevPlanHash = snap.planHash;
+
+      // Событие Б: Появилась новая цель на экране
+      let hasNewTarget = false;
+      snap.tIds.forEach((id) => { if (!prevTargetIds.has(id)) hasNewTarget = true; });
+      if (hasNewTarget) {
+        playBeep(880, 180);
+      }
+      prevTargetIds = snap.tIds;
+
+      // Событие В: Получено целеуказание (ЦУ)
+      if (myId && snap.asgHash && snap.asgHash !== prevAssignedHash) {
+        playBeep(880, 180);
+        if (typeof hintText !== "undefined") hintText.textContent = "🎯 Получено целеуказание!";
+      }
+      prevAssignedHash = snap.asgHash;
+    };
+  }
+
+  // Событие Г: Донесение командиру о прибытии МОГ в плановую точку
+  const origApplyIncoming = window.applyIncomingRoom;
+  if (typeof origApplyIncoming === "function") {
+    window.applyIncomingRoom = function(roomData) {
+      if (currentRole === "cmd" && roomData && roomData.mogs) {
+        Object.keys(roomData.mogs).forEach((k) => {
+          const inc = Reflect.get(roomData.mogs, k);
+          if (inc && inc.arrivedTs && inc.arrivedTs > (prevArrivedMap[k] || 0)) {
+            prevArrivedMap[k] = inc.arrivedTs;
+            playBeep(880, 220);
+            if (typeof hintText !== "undefined") {
+              hintText.textContent = "✅ ДОНЕСЕНИЕ: МОГ-" + k + " прибыл на плановую позицию!";
+              hintText.style.color = "#4ade80";
+            }
+          }
+        });
+      }
+      return origApplyIncoming(roomData);
+    };
+  }
+
+  // Передаем флаг прибытия arrivedTs при отправке состояния от МОГ
+  const origFetch = window.fetch;
+  window.fetch = function(url, opts) {
+    if (typeof url === "string" && url.includes("/mogs/") && opts && opts.method === "PUT" && opts.body) {
+      try {
+        const myId = getMyMogId();
+        const myMog = myId ? Reflect.get(mogsState, myId) : null;
+        if (myMog && myMog.arrivedTs) {
+          const parsed = JSON.parse(opts.body);
+          parsed.arrivedTs = myMog.arrivedTs;
+          opts.body = JSON.stringify(parsed);
+        }
+      } catch (e) {}
+    }
+    return origFetch.apply(this, arguments);
+  };
+})();

@@ -528,6 +528,16 @@ renderAll();
   if (roleSel) roleSel.addEventListener("change", () => setTimeout(updateCompassBtnPos, 50));
   btn.innerHTML = '<span id="compassArrow" style="display:inline-block; font-size:15px; transition:transform 0.15s;">🧭</span><span id="compassLabel">На север</span>';
   document.body.appendChild(btn);
+  function fixCompassPos() {
+    const bar = document.getElementById("roleSelect")?.closest("div");
+    if (bar) {
+      const r = bar.getBoundingClientRect();
+      if (r.bottom > 40 && r.bottom < 300) btn.style.top = (Math.round(r.bottom) + 10) + "px";
+    }
+  }
+  setTimeout(fixCompassPos, 150);
+  window.addEventListener("resize", fixCompassPos);
+  document.getElementById("roleSelect")?.addEventListener("change", () => setTimeout(fixCompassPos, 50));
 
   // 2. Стили для компенсации поворота (чтобы подписи не были вверх ногами и карта не обрезалась по углам)
   const st = document.createElement("style");

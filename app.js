@@ -504,42 +504,54 @@ renderAll();
 // === МОДУЛЬ КОМПАСА И ОРИЕНТИРОВАНИЯ КАРТЫ ===
 (function initCompassModule() {
   let compassMode = "north"; // "north" | "fixed" | "auto"
-  let currentHeading = 0;    // Текущий азимут телефона (0..360)
-  let mapAngle = 0;          // Текущий угол поворота карты
+  let currentHeading = 0;
+  let mapAngle = 0;
   let sensorActive = false;
 
-  // 1. Создаем кнопку-компас поверх карты
   const btn = document.createElement("button");
   btn.id = "btnCompassMode";
   btn.type = "button";
-  btn.style.cssText = "position:fixed; top:115px; right:10px; z-index:1100; background:rgba(15,23,42,0.92); color:#f8fafc; border:1.5px solid #38bdf8; border-radius:10px; padding:6px 10px; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,0.45); display:flex; align-items:center; gap:5px;";
-  function updateCompassBtnPos() {
-    const bar = document.querySelector(".topbar, .toolbar, header, #topbar, #controls") || document.getElementById("roleSelect")?.parentElement;
-    if (bar) {
-      const rect = bar.getBoundingClientRect();
-      if (rect.bottom > 0 && rect.bottom < window.innerHeight * 0.5) {
-        btn.style.top = (Math.round(rect.bottom) + 10) + "px";
-      }
-    }
-  }
-  setTimeout(updateCompassBtnPos, 150);
-  window.addEventListener("resize", updateCompassBtnPos);
-  const roleSel = document.getElementById("roleSelect");
-  if (roleSel) roleSel.addEventListener("change", () => setTimeout(updateCompassBtnPos, 50));
+  btn.style.cssText = "position:fixed; top:165px; right:10px; z-index:1100; background:rgba(15,23,42,0.92); color:#f8fafc; border:1.5px solid #38bdf8; border-radius:10px; padding:7px 11px; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,0.45); display:flex; align-items:center; gap:5px; touch-action:none;";
   btn.innerHTML = '<span id="compassArrow" style="display:inline-block; font-size:15px; transition:transform 0.15s;">🧭</span><span id="compassLabel">На север</span>';
   document.body.appendChild(btn);
-  function fixCompassPos() {
-    const bar = document.getElementById("roleSelect")?.closest("div");
-    if (bar) {
-      const r = bar.getBoundingClientRect();
-      if (r.bottom > 40 && r.bottom < 300) btn.style.top = (Math.round(r.bottom) + 10) + "px";
-    }
-  }
-  setTimeout(fixCompassPos, 150);
-  window.addEventListener("resize", fixCompassPos);
-  document.getElementById("roleSelect")?.addEventListener("change", () => setTimeout(fixCompassPos, 50));
 
-  // 2. Стили для компенсации поворота (чтобы подписи не были вверх ногами и карта не обрезалась по углам)
+  // Автоматически ставим кнопку ниже самого нижнего элемента верхней панели
+  function placeBelowTopPanel() {
+    if (btn.dataset.dragged === "1") return;
+    let maxBottom = 140;
+    document.querySelectorAll("button, select, input").forEach((el) => {
+      if (el.id === "btnCompassMode") return;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.top >= 0 && r.bottom < window.innerHeight * 0.45) {
+        if (r.bottom > maxBottom) maxBottom = r.bottom;
+      }
+    });
+    btn.style.top = (Math.round(maxBottom) + 12) + "px";
+  }
+  setTimeout(placeBelowTopPanel, 250);
+  window.addEventListener("resize", placeBelowTopPanel);
+  document.getElementById("roleSelect")?.addEventListener("change", () => setTimeout(placeBelowTopPanel, 100));
+
+  // Возможность перетащить кнопку пальцем в любое место экрана
+  let dragStartY = 0, dragStartX = 0, btnStartTop = 0, btnStartRight = 0, wasMoved = false;
+  btn.addEventListener("touchstart", (e) => {
+    const t = e.touches[0];
+    dragStartX = t.clientX; dragStartY = t.clientY;
+    const r = btn.getBoundingClientRect();
+    btnStartTop = r.top; btnStartRight = window.innerWidth - r.right;
+    wasMoved = false;
+  }, { passive: true });
+  btn.addEventListener("touchmove", (e) => {
+    const t = e.touches[0];
+    const dx = t.clientX - dragStartX, dy = t.clientY - dragStartY;
+    if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
+      wasMoved = true;
+      btn.dataset.dragged = "1";
+      btn.style.top = Math.max(10, Math.min(window.innerHeight - 50, btnStartTop + dy)) + "px";
+      btn.style.right = Math.max(5, Math.min(window.innerWidth - 90, btnStartRight - dx)) + "px";
+    }
+  }, { passive: true });
+
   const st = document.createElement("style");
   st.textContent = `
     #map { transition: transform 0.15s ease-out; transform-origin: center center; }
@@ -561,7 +573,6 @@ renderAll();
       mapEl.style.top = "";
       mapEl.classList.remove("compass-rotated");
     } else {
-      // Увеличиваем контейнер карты на ~42%, чтобы при повороте на 45° не было пустых углов
       mapEl.style.width = "142vw";
       mapEl.style.height = "142vh";
       mapEl.style.left = "-21vw";
@@ -569,13 +580,10 @@ renderAll();
       mapEl.style.transform = "rotate(" + (-mapAngle) + "deg)";
       mapEl.classList.add("compass-rotated");
     }
-    if (arrowEl) {
-      arrowEl.style.transform = "rotate(" + (-mapAngle) + "deg)";
-    }
+    if (arrowEl) arrowEl.style.transform = "rotate(" + (-mapAngle) + "deg)";
     setTimeout(() => { if (typeof map !== "undefined") map.invalidateSize({ animate: false }); }, 160);
   }
 
-  // 3. Корректировка координат клика по повернутой карте
   if (typeof map !== "undefined" && map.mouseEventToContainerPoint) {
     const origMouseToPoint = map.mouseEventToContainerPoint.bind(map);
     map.mouseEventToContainerPoint = function(ev) {
@@ -592,17 +600,12 @@ renderAll();
     };
   }
 
-  // 4. Чтение датчика ориентации (Android + iOS)
   function onOrientation(e) {
     let heading = null;
-    if (typeof e.webkitCompassHeading === "number") {
-      heading = e.webkitCompassHeading; // iOS
-    } else if (e.alpha !== null) {
-      heading = (360 - e.alpha) % 360; // Android
-    }
+    if (typeof e.webkitCompassHeading === "number") heading = e.webkitCompassHeading;
+    else if (e.alpha !== null) heading = (360 - e.alpha) % 360;
     if (heading === null || isNaN(heading)) return;
 
-    // Сглаживание дребезга компаса
     let diff = ((heading - currentHeading + 540) % 360) - 180;
     currentHeading = (currentHeading + diff * 0.25 + 360) % 360;
 
@@ -620,14 +623,8 @@ renderAll();
     if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") {
       try {
         const res = await DeviceOrientationEvent.requestPermission();
-        if (res !== "granted") {
-          alert("Доступ к компасу запрещен в настройках браузера.");
-          return false;
-        }
-      } catch (err) {
-        alert("Ошибка запроса компаса (нужен HTTPS): " + err.message);
-        return false;
-      }
+        if (res !== "granted") { alert("Доступ к компасу запрещен в настройках браузера."); return false; }
+      } catch (err) { alert("Ошибка запроса компаса (нужен HTTPS): " + err.message); return false; }
     }
     window.addEventListener("deviceorientationabsolute", onOrientation, true);
     window.addEventListener("deviceorientation", onOrientation, true);
@@ -635,15 +632,14 @@ renderAll();
     return true;
   }
 
-  // 5. Переключение режимов по клику: На север -> Ориентировать разово -> Авто-компас -> На север
   btn.onclick = async () => {
+    if (wasMoved) { wasMoved = false; return; }
     const lbl = document.getElementById("compassLabel");
     if (compassMode === "north") {
       const ok = await enableCompassSensor();
       if (!ok) return;
       compassMode = "fixed";
       btn.style.borderColor = "#f59e0b";
-      // Небольшая задержка, чтобы датчик успел отдать первый замер
       setTimeout(() => {
         applyMapRotation(currentHeading);
         if (lbl) lbl.textContent = "Ориент: " + Math.round(currentHeading) + "°";

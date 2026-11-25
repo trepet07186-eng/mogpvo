@@ -512,7 +512,20 @@ renderAll();
   const btn = document.createElement("button");
   btn.id = "btnCompassMode";
   btn.type = "button";
-  btn.style.cssText = "position:fixed; top:62px; right:12px; z-index:1100; background:rgba(15,23,42,0.92); color:#f8fafc; border:1.5px solid #38bdf8; border-radius:10px; padding:7px 11px; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,0.45); display:flex; align-items:center; gap:6px;";
+  btn.style.cssText = "position:fixed; top:115px; right:10px; z-index:1100; background:rgba(15,23,42,0.92); color:#f8fafc; border:1.5px solid #38bdf8; border-radius:10px; padding:6px 10px; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 4px 12px rgba(0,0,0,0.45); display:flex; align-items:center; gap:5px;";
+  function updateCompassBtnPos() {
+    const bar = document.querySelector(".topbar, .toolbar, header, #topbar, #controls") || document.getElementById("roleSelect")?.parentElement;
+    if (bar) {
+      const rect = bar.getBoundingClientRect();
+      if (rect.bottom > 0 && rect.bottom < window.innerHeight * 0.5) {
+        btn.style.top = (Math.round(rect.bottom) + 10) + "px";
+      }
+    }
+  }
+  setTimeout(updateCompassBtnPos, 150);
+  window.addEventListener("resize", updateCompassBtnPos);
+  const roleSel = document.getElementById("roleSelect");
+  if (roleSel) roleSel.addEventListener("change", () => setTimeout(updateCompassBtnPos, 50));
   btn.innerHTML = '<span id="compassArrow" style="display:inline-block; font-size:15px; transition:transform 0.15s;">🧭</span><span id="compassLabel">На север</span>';
   document.body.appendChild(btn);
 

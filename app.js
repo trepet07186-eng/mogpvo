@@ -515,7 +515,6 @@ renderAll();
   btn.innerHTML = '<span id="compassArrow" style="display:inline-block; font-size:15px; transition:transform 0.15s;">🧭</span><span id="compassLabel">На север</span>';
   document.body.appendChild(btn);
 
-  // Автоматически ставим кнопку ниже самого нижнего элемента верхней панели
   function placeBelowTopPanel() {
     if (btn.dataset.dragged === "1") return;
     let maxBottom = 210;
@@ -532,17 +531,16 @@ renderAll();
   window.addEventListener("resize", placeBelowTopPanel);
   document.getElementById("roleSelect")?.addEventListener("change", () => setTimeout(placeBelowTopPanel, 100));
 
-  // Возможность перетащить кнопку пальцем в любое место экрана
   let dragStartY = 0, dragStartX = 0, btnStartTop = 0, btnStartRight = 0, wasMoved = false;
   btn.addEventListener("touchstart", (e) => {
-    const t = e.touches[0];
+    const t = e.touches;
     dragStartX = t.clientX; dragStartY = t.clientY;
     const r = btn.getBoundingClientRect();
     btnStartTop = r.top; btnStartRight = window.innerWidth - r.right;
     wasMoved = false;
   }, { passive: true });
   btn.addEventListener("touchmove", (e) => {
-    const t = e.touches[0];
+    const t = e.touches;
     const dx = t.clientX - dragStartX, dy = t.clientY - dragStartY;
     if (Math.abs(dx) > 6 || Math.abs(dy) > 6) {
       wasMoved = true;
@@ -554,45 +552,56 @@ renderAll();
 
   const st = document.createElement("style");
   st.textContent = `
-    #map { transition: transform 0.15s ease-out; transform-origin: center center; }
-    .compass-rotated .leaflet-tooltip { transform-origin: center center; }
+    body, html { overflow: hidden !important; }
+    #map { transition: transform 0.15s ease-out; transform-origin: center center !important; }
+    #map.compass-rotated {
+      position: fixed !important;
+      width: 165vmax !important;
+      height: 165vmax !important;
+      left: 50% !important;
+      top: 50% !important;
+      right: auto !important;
+      bottom: auto !important;
+      margin: 0 !important;
+    }
   `;
   document.head.appendChild(st);
 
   function applyMapRotation(deg) {
+    const prevAngle = mapAngle;
     mapAngle = (deg + 360) % 360;
     const mapEl = document.getElementById("map");
     const arrowEl = document.getElementById("compassArrow");
     if (!mapEl) return;
 
     if (mapAngle === 0) {
-      mapEl.style.transform = "";
-      mapEl.style.width = "";
-      mapEl.style.height = "";
-      mapEl.style.left = "";
-      mapEl.style.top = "";
       mapEl.classList.remove("compass-rotated");
+      mapEl.style.transform = "";
     } else {
-      mapEl.style.width = "142vw";
-      mapEl.style.height = "142vh";
-      mapEl.style.left = "-21vw";
-      mapEl.style.top = "-21vh";
-      mapEl.style.transform = "rotate(" + (-mapAngle) + "deg)";
       mapEl.classList.add("compass-rotated");
+      mapEl.style.transform = "translate(-50%, -50%) rotate(" + (-mapAngle) + "deg)";
     }
     if (arrowEl) arrowEl.style.transform = "rotate(" + (-mapAngle) + "deg)";
-    setTimeout(() => { if (typeof map !== "undefined") map.invalidateSize({ animate: false }); }, 160);
+
+    // Пересчитываем размер холста тайлов Leaflet при входе/выходе из режима поворота
+    if ((prevAngle === 0) !== (mapAngle === 0) && typeof map !== "undefined") {
+      setTimeout(() => map.invalidateSize({ animate: false }), 50);
+    }
   }
 
+  // Точный пересчет кликов по увеличенному и повернутому холсту #map
   if (typeof map !== "undefined" && map.mouseEventToContainerPoint) {
-    const origMouseToPoint = map.mouseEventToContainerPoint.bind(map);
     map.mouseEventToContainerPoint = function(ev) {
-      const pt = origMouseToPoint(ev);
-      if (mapAngle === 0) return pt;
+      const e = ev.touches ? ev.touches : (ev.changedTouches ? ev.changedTouches : ev);
+      const clientX = e.clientX, clientY = e.clientY;
       const size = this.getSize();
       const cx = size.x / 2, cy = size.y / 2;
+      const dx = clientX - window.innerWidth / 2;
+      const dy = clientY - window.innerHeight / 2;
+      if (mapAngle === 0) {
+        return L.point(cx + dx, cy + dy);
+      }
       const rad = (mapAngle * Math.PI) / 180;
-      const dx = pt.x - cx, dy = pt.y - cy;
       return L.point(
         cx + dx * Math.cos(rad) - dy * Math.sin(rad),
         cy + dx * Math.sin(rad) + dy * Math.cos(rad)

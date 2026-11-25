@@ -1,0 +1,104 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>БУ МОГ ПВО</title><link rel="manifest" href="manifest.json" /><link rel="icon" type="image/png" href="icon-192.png" /><link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="stylesheet" href="leaflet.css" />
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body, html { margin:0; padding:0; height:100%; width:100%; background:#0f1318; color:#eef2f6; font-family:sans-serif; overflow:hidden; }
+    #map { position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:1; background:#141a21; }
+    .dark-tiles { filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(90%); }
+    .top-bar { position:fixed; top:6px; left:6px; right:6px; z-index:1000; display:flex; flex-wrap:wrap; gap:5px; align-items:center; background:rgba(15,19,24,0.94); border:1px solid #2d3748; border-radius:10px; padding:7px; }
+    .btn { background:#1e2631; color:#f8fafc; border:1px solid #3b4758; border-radius:7px; padding:6px 9px; font-size:12px; font-weight:700; cursor:pointer; }
+    .btn.active { background:#1d4ed8; border-color:#60a5fa; color:#fff; }
+    .btn.green { background:#14532d; border-color:#22c55e; }
+    .btn.red { background:#7f1d1d; border-color:#ef4444; }
+    .btn.amber { background:#78350f; border-color:#f59e0b; }
+    select, input { background:#0b0e12; color:#ffd23f; border:1px solid #3b4758; border-radius:7px; padding:5px 7px; font-size:12px; font-weight:700; }
+    .status-hint { font-size:11px; color:#93c5fd; width:100%; margin-top:2px; }
+    .route-banner { position:fixed; top:94px; left:6px; right:6px; z-index:1000; background:rgba(20,83,45,0.95); border:1px solid #22c55e; border-radius:9px; padding:8px 10px; display:none; font-size:13px; font-weight:800; color:#dcfce7; }
+    .modal-box { position:fixed; top:92px; left:8px; right:8px; z-index:1100; background:rgba(15,19,24,0.97); border:1px solid #f59e0b; border-radius:10px; padding:10px; display:none; }
+    .m-row { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+    .m-row label { font-size:12px; color:#cbd5e1; min-width:85px; }
+    .m-row select, .m-row input { flex:1; width:100%; }
+    .bottom-sheet { position:fixed; bottom:0; left:0; right:0; z-index:1000; background:rgba(15,19,24,0.95); border-top:1px solid #334155; border-radius:14px 14px 0 0; padding:7px 9px 10px; max-height:40vh; display:flex; flex-direction:column; }
+    .controls-row { display:flex; flex-wrap:wrap; gap:5px; align-items:center; padding-bottom:6px; border-bottom:1px solid #26303d; margin-bottom:6px; }
+    .cards-grid { overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:6px; }
+    .card { background:#161d26; border-left:4px solid #38bdf8; border-radius:6px; padding:6px 8px; font-size:12px; }
+    .card.assigned { border-left-color:#ef4444; background:#2d1215; border:1px solid #ef4444; }
+    .card.zone-detect { border-left-color:#22c55e; background:#10261b; }
+    .card-big { font-size:16px; font-weight:800; color:#ffd23f; }
+    .card-sub { font-size:11px; color:#94a3b8; }
+    .mog-lbl-blue { background:rgba(3,105,161,0.92); border:1px solid #38bdf8; color:#fff; font-weight:700; font-size:11px; padding:1px 5px; border-radius:4px; }
+    .mog-lbl-green { background:rgba(20,83,45,0.92); border:1px solid #4ade80; color:#fff; font-weight:700; font-size:11px; padding:1px 5px; border-radius:4px; }
+    .vec-lbl { background:rgba(0,0,0,0.85); color:#ffd23f; border:1px solid #ffd23f; font-weight:800; font-size:11px; padding:1px 4px; border-radius:4px; }
+    .vec-lbl-red { background:rgba(127,29,29,0.95); color:#fff; border:1px solid #ef4444; font-weight:800; font-size:11px; padding:1px 5px; border-radius:4px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="top-bar">
+    <select id="roleSelect">
+      <option value="cmd">🎖 Командир</option>
+      <option value="mog_1">🛡 МОГ-1</option><option value="mog_2">🛡 МОГ-2</option>
+      <option value="mog_3">🛡 МОГ-3</option><option value="mog_4">🛡 МОГ-4</option>
+      <option value="mog_5">🛡 МОГ-5</option><option value="mog_6">🛡 МОГ-6</option>
+      <option value="mog_7">🛡 МОГ-7</option><option value="mog_8">🛡 МОГ-8</option>
+      <option value="mog_9">🛡 МОГ-9</option><option value="mog_10">🛡 МОГ-10</option>
+      <option value="mog_11">🛡 МОГ-11</option><option value="mog_12">🛡 МОГ-12</option>
+    </select>
+    <select id="mapTheme">
+      <option value="hybrid">🛰 Гибрид</option>
+      <option value="dark">🌑 Тёмная</option>
+      <option value="light">☀️ Светлая</option>
+    </select>
+    <button id="btnDayNight" class="btn green">☀️ День</button>
+    <button id="modeGreenMog" class="btn active cmd-only">+ Поз. (Зелён.)</button>
+    <button id="modeAssign" class="btn amber cmd-only">🎯 ЦУ (2 клика)</button>
+    <button id="btnGpsNow" class="btn active mog-only" style="display:none;">📍 Моя поз. (GPS)</button>
+    <button id="modeSimMoveMog" class="btn mog-only" style="display:none;">🚙 Тест-марш</button>
+    <button id="modeTarget2Pt" class="btn">+ Цель (2 т.)</button>
+    <button id="btnOpenTri" class="btn">📐 По азимутам</button>
+    <button id="btnOpenSync" class="btn green">📡 Связь</button>
+    <button id="btnClearAll" class="btn red cmd-only">Сброс</button>
+    <div id="hintText" class="status-hint">Инициализация...</div>
+  </div>
+  <div id="routeBanner" class="route-banner"></div>
+  <div id="sectorModal" class="modal-box">
+    <div style="font-weight:800; color:#ffd23f; margin-bottom:6px;" id="sectorModalTitle">Сектор запрета стрельбы (1000 м)</div>
+    <div class="m-row"><label>Запрет ОТ (°):</label><input type="number" id="secFrom" min="0" max="360" placeholder="Напр. 170" /></div>
+    <div class="m-row"><label>Запрет ДО (°):</label><input type="number" id="secTo" min="0" max="360" placeholder="Напр. 280" /></div>
+    <div class="m-row" style="margin-bottom:0;"><button id="btnSaveSector" class="btn green" style="flex:1;">✅ Поставить</button><button id="btnCancelSector" class="btn red">Отмена</button></div>
+  </div>
+  <div id="triModal" class="modal-box">
+    <div style="font-weight:800; color:#ffd23f; margin-bottom:6px;">Засечка цели по азимутам</div>
+    <div class="m-row"><label>МОГ №1:</label><select id="triMog1"></select><input type="number" id="triAz1" min="0" max="360" placeholder="Азимут °" /></div>
+    <div class="m-row"><label>МОГ №2:</label><select id="triMog2"></select><input type="number" id="triAz2" min="0" max="360" placeholder="Азимут °" /></div>
+    <div class="m-row" style="margin-bottom:0;"><label>Курс:</label><input type="number" id="triCourse" min="0" max="360" value="90" /><button id="btnCalcTri" class="btn green" style="flex:1.4;">🎯 Засечь</button><button id="btnCloseTri" class="btn">✕</button></div>
+  </div>
+  <div id="syncModal" class="modal-box" style="border-color:#22c55e;">
+    <div style="font-weight:800; color:#4ade80; margin-bottom:6px;">📡 Обмен обстановкой между телефонами</div>
+    <div class="m-row"><label>Код канала:</label><input type="text" id="roomCode" value="333" /><button id="btnConnectNet" class="btn green">Подключить</button></div>
+    <div style="font-size:11px; color:#94a3b8; margin-bottom:6px;" id="netStatus">Статус: автономный режим</div>
+    <div class="m-row" style="margin-bottom:0;"><button id="btnCopyPacket" class="btn amber" style="flex:1;">📤 Копировать</button><button id="btnPastePacket" class="btn" style="flex:1;">📥 Вставить</button><button id="btnCloseSync" class="btn">✕</button></div>
+  </div>
+  <div class="bottom-sheet">
+    <div class="controls-row">
+      <button id="btnToggleMove" class="btn green">▶ Пуск целей</button>
+      <span style="font-size:12px; color:#ffd23f; font-weight:700;">V:</span>
+      <input type="range" id="speedRange" min="180" max="220" value="200" style="width:85px;" />
+      <span id="speedVal" style="font-size:12px; color:#ffd23f; font-weight:700;">200 км/ч</span>
+      <button id="btnClearTargets" class="btn red">Снять цели</button>
+    </div>
+    <div id="infoList" class="cards-grid"></div>
+  </div>
+  <script>if("serviceWorker" in navigator){navigator.serviceWorker.register("./sw.js");}</script>
+  <script src="leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
+
+
+

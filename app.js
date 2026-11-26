@@ -312,10 +312,62 @@ document.getElementById("speedRange").oninput = (e) => { document.getElementById
 document.getElementById("btnToggleMove").onclick = function() { targetsMoving = !targetsMoving; this.textContent = targetsMoving ? "⏸ Пауза" : "▶ Пуск целей"; this.className = targetsMoving ? "btn amber" : "btn green"; };
 
 
-let netRoom = "", rxCount = 0, txCount = 0, netOnline = false, syncTimer = null, isBusy = false;
+let netRoom = "", netRoomHash = "", rxCount = 0, txCount = 0, netOnline = false, syncTimer = null, isBusy = false;
 let lastResetTs = 0, lastTargetsClearTs = 0, deletedTargetIds = [], undoStack = [];
 const bc = ("BroadcastChannel" in window) ? new BroadcastChannel("mog_pvo_local") : null;
 const FB_URL = "https://" + "nebo22-default-rtdb." + "firebaseio." + "com/rooms/";
+
+const CryptoSync = (() => {
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const SALT = enc.encode("MOG_PVO_SALT_2026_V1");
+
+  async function hashRoomId(secret) {
+    const buf = await crypto.subtle.digest("SHA-256", enc.encode("ROOM_" + secret));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+  }
+
+  async function deriveKey(secret) {
+    const baseKey = await crypto.subtle.importKey("raw", enc.encode(secret), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt: SALT, iterations: 10000, hash: "SHA-256" },
+      baseKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  async function encryptObj(obj, secret) {
+    const key = await deriveKey(secret);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(obj)));
+    const combined = new Uint8Array(iv.length + cipher.byteLength);
+    combined.set(iv, 0);
+    combined.set(new Uint8Array(cipher), iv.length);
+    let bin = "";
+    for (let i = 0; i < combined.length; i++) bin += String.fromCharCode(combined[i]);
+    return { enc: btoa(bin) };
+  }
+
+  async function decryptNode(node, secret) {
+    if (!node || typeof node !== "object") return node;
+    if (typeof node.enc === "string") {
+      try {
+        const bin = atob(node.enc);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const iv = bytes.slice(0, 12);
+        const data = bytes.slice(12);
+        const key = await deriveKey(secret);
+        const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+        return JSON.parse(dec.decode(plain));
+      } catch (e) { return null; }
+    }
+    return node;
+  }
+
+  return { hashRoomId, encryptObj, decryptNode };
+})();
 
 (function() {
   const b = document.getElementById("btnClearAll");
@@ -346,6 +398,14 @@ function undoLastAction() {
   broadcastState(); renderAll();
 }
 
+function wipeLocalTraces() {
+  undoStack = []; targets = []; deletedTargetIds = []; selectedTargetForAssign = null; nextTargetId = 1;
+  window._cachedRouteCoords = null; lastRouteKey = "";
+  updateClearTargetsBtn(); triRaysLayer.clearLayers(); routesLayer.clearLayers();
+  for (let i = 1; i <= 12; i++) Reflect.set(mogsState, i, { id: i, blue: null, green: null, sector: null });
+  try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
+}
+
 document.getElementById("btnClearTargets").onclick = () => {
   if (selectedTargetForAssign !== null) {
     saveHistory();
@@ -363,40 +423,51 @@ document.getElementById("btnClearTargets").onclick = () => {
 };
 
 document.getElementById("btnClearAll").onclick = async () => {
-  if (!confirm("Очистить всю обстановку у командира и всех МОГ?")) return;
-  saveHistory(); targets = []; deletedTargetIds = []; selectedTargetForAssign = null;
-  updateClearTargetsBtn(); triRaysLayer.clearLayers(); routesLayer.clearLayers();
-  for (let i = 1; i <= 12; i++) Reflect.set(mogsState, i, { id: i, blue: null, green: null, sector: null });
+  if (!confirm("Очистить всю обстановку и удалить данные с сервера?")) return;
   lastResetTs = Date.now(); lastTargetsClearTs = lastResetTs;
-  renderAll(); hintText.textContent = "🧹 Обстановка полностью сброшена.";
+  wipeLocalTraces(); renderAll();
+  hintText.textContent = "⏳ Очистка устройств и удаление данных из облака...";
   if (bc) bc.postMessage({ sender: currentRole, resetTs: lastResetTs, mogs: {}, targets: [] });
-  if (netRoom) {
+  if (netRoom && netRoomHash) {
     isBusy = true;
+    const roomUrl = FB_URL + netRoomHash + ".json";
     try {
-      await fetch(FB_URL + encodeURIComponent(netRoom) + ".json", {
+      const encCmd = await CryptoSync.encryptObj({ mogs: {}, targets: [], deletedTargetIds: [], targetsClearedTs: lastTargetsClearTs, ts: lastResetTs }, netRoom);
+      await fetch(roomUrl, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resetTs: lastResetTs, cmd: { mogs: {}, targets: [], deletedTargetIds: [], targetsClearedTs: lastTargetsClearTs, ts: lastResetTs }, mogs: {} })
+        body: JSON.stringify({ resetTs: lastResetTs, cmd: encCmd, mogs: {} })
       });
-      txCount++; updateNetLabel("");
+      await new Promise((r) => setTimeout(r, 4000));
+      await fetch(roomUrl, { method: "DELETE" });
+      rxCount = 0; txCount = 0; updateNetLabel("");
+      hintText.textContent = "🧹 Обстановка полностью сброшена, облако очищено.";
     } catch (e) { updateNetLabel("Ошибка сброса: " + e.message); } finally { isBusy = false; }
+  } else {
+    hintText.textContent = "🧹 Локальная обстановка полностью сброшена.";
   }
 };
 function updateNetLabel(errTxt) {
   const st = document.getElementById("netStatus");
   if (!st) return;
-  st.textContent = errTxt ? ("❌ " + errTxt) : ((netOnline ? "✅ В эфире (" + netRoom + ")" : "⏳ Подключение...") + " | Отпр: " + txCount + " • Прин: " + rxCount);
+  st.textContent = errTxt ? ("❌ " + errTxt) : ((netOnline ? "✅ В эфире [AES-256] (" + netRoom + ")" : "⏳ Подключение...") + " | Отпр: " + txCount + " • Прин: " + rxCount);
   st.style.color = errTxt ? "#f87171" : (netOnline ? "#4ade80" : "#ffd23f");
 }
 
 function applyIncomingRoom(roomData) {
+  if (roomData === null) {
+    if (targets.length > 0 || Object.values(mogsState).some((m) => m.blue || m.green)) {
+      wipeLocalTraces(); renderAll();
+      hintText.textContent = "🧹 Канал очищен командиром.";
+    }
+    return;
+  }
   if (!roomData || typeof roomData !== "object") return;
   let changed = false;
   if (roomData.resetTs && roomData.resetTs > lastResetTs) {
     lastResetTs = roomData.resetTs; lastTargetsClearTs = roomData.resetTs;
-    targets = []; deletedTargetIds = []; selectedTargetForAssign = null; updateClearTargetsBtn();
-    triRaysLayer.clearLayers(); routesLayer.clearLayers();
-    for (let i = 1; i <= 12; i++) Reflect.set(mogsState, i, { id: i, blue: null, green: null, sector: null });
-    renderAll(); return;
+    wipeLocalTraces(); renderAll();
+    hintText.textContent = "🧹 Получен сигнал полного сброса.";
+    return;
   }
   if (currentRole === "cmd") {
     if (roomData.mogs && typeof roomData.mogs === "object") {
@@ -454,25 +525,41 @@ if (bc) bc.onmessage = (ev) => {
 };
 
 async function syncFirebase(pushMine) {
-  if (!netRoom || isBusy) return;
+  if (!netRoom || !netRoomHash || isBusy) return;
   isBusy = true;
   const activeMogs = {};
   Object.keys(mogsState).forEach((k) => { const m = Reflect.get(mogsState, k); if (m && (m.blue || m.green || m.sector)) Reflect.set(activeMogs, k, m); });
   if (bc && pushMine) bc.postMessage({ sender: currentRole, mogs: activeMogs, targets: targets, deletedTargetIds: deletedTargetIds, targetsClearedTs: lastTargetsClearTs });
-  const roomBase = FB_URL + encodeURIComponent(netRoom);
+  const roomBase = FB_URL + netRoomHash;
   try {
     const rGet = await fetch(roomBase + ".json?t=" + Date.now());
     if (!rGet.ok) throw new Error("HTTP " + rGet.status);
-    const data = await rGet.json();
-    netOnline = true; rxCount++; applyIncomingRoom(data);
+    const rawData = await rGet.json();
+    netOnline = true; rxCount++;
+    if (rawData === null) {
+      applyIncomingRoom(null);
+    } else if (typeof rawData === "object") {
+      const decData = { resetTs: rawData.resetTs || 0 };
+      if (rawData.cmd) decData.cmd = await CryptoSync.decryptNode(rawData.cmd, netRoom);
+      if (rawData.mogs && typeof rawData.mogs === "object") {
+        decData.mogs = {};
+        for (const k of Object.keys(rawData.mogs)) {
+          const decMog = await CryptoSync.decryptNode(Reflect.get(rawData.mogs, k), netRoom);
+          if (decMog) Reflect.set(decData.mogs, k, decMog);
+        }
+      }
+      applyIncomingRoom(decData);
+    }
     if (pushMine) {
       if (currentRole === "cmd") {
-        const r1 = await fetch(roomBase + "/cmd.json", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mogs: activeMogs, targets: targets, deletedTargetIds: deletedTargetIds, targetsClearedTs: lastTargetsClearTs, ts: Date.now() }) });
+        const payload = await CryptoSync.encryptObj({ mogs: activeMogs, targets: targets, deletedTargetIds: deletedTargetIds, targetsClearedTs: lastTargetsClearTs, ts: Date.now() }, netRoom);
+        const r1 = await fetch(roomBase + "/cmd.json", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!r1.ok) throw new Error("HTTP " + r1.status);
         txCount++;
       } else {
         const myId = getMyMogId(), myMog = Reflect.get(mogsState, myId);
-        const r2 = await fetch(roomBase + "/mogs/" + myId + ".json", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ blue: (myMog && myMog.blue) ? myMog.blue : null, targets: targets, ts: Date.now() }) });
+        const payload = await CryptoSync.encryptObj({ blue: (myMog && myMog.blue) ? myMog.blue : null, targets: targets, arrivedTs: myMog?.arrivedTs || 0, ts: Date.now() }, netRoom);
+        const r2 = await fetch(roomBase + "/mogs/" + myId + ".json", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!r2.ok) throw new Error("HTTP " + r2.status);
         txCount++;
       }
@@ -484,11 +571,12 @@ async function syncFirebase(pushMine) {
 function broadcastState() { syncFirebase(true); }
 document.getElementById("btnOpenSync").onclick = () => document.getElementById("syncModal").style.display = "block";
 document.getElementById("btnCloseSync").onclick = () => document.getElementById("syncModal").style.display = "none";
-document.getElementById("btnConnectNet").onclick = () => {
+document.getElementById("btnConnectNet").onclick = async () => {
   const room = document.getElementById("roomCode").value.trim().toUpperCase().replace(/[^A-ZА-Я0-9_-]/g, "");
   if (!room) return;
   if (syncTimer) clearInterval(syncTimer);
-  netRoom = room; rxCount = 0; txCount = 0; netOnline = false;
+  netRoom = room; netRoomHash = await CryptoSync.hashRoomId(room);
+  rxCount = 0; txCount = 0; netOnline = false;
   updateNetLabel(""); syncFirebase(true); syncTimer = setInterval(() => syncFirebase(true), 2000);
 };
 document.getElementById("btnCopyPacket").onclick = () => { navigator.clipboard.writeText(JSON.stringify({ mogs: mogsState, targets: targets })).then(() => alert("✅ Пакет скопирован!")); };

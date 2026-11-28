@@ -613,8 +613,8 @@ renderAll();
         if (r.bottom > maxBottom) maxBottom = r.bottom;
       }
     });
-    btn.style.top = (Math.round(maxBottom) + 12) + "px";
-    btn.style.right = (window.innerWidth > window.innerHeight) ? "276px" : "12px";
+    btn.style.top = "10px";
+    btn.style.right = "12px";
   }
   setTimeout(placeBelowTopPanel, 250);
   window.addEventListener("resize", placeBelowTopPanel);
@@ -1216,3 +1216,56 @@ renderAll();
 })();
 
 try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(e) {}
+
+
+// === ЛОГИКА ВЫДВИЖНЫХ ПАНЕЛЕЙ НАД КАРТОЙ ===
+(function initCleanMapHud() {
+  const btnApp = document.getElementById("btnToggleAppMenu");
+  const appPanel = document.querySelector(".top-bar");
+  const btnTgt = document.getElementById("btnToggleTargetsMenu");
+  const tgtPanel = document.querySelector(".bottom-sheet");
+  const tgtBadge = document.getElementById("tgtFabBadge");
+
+  if (btnApp && appPanel) {
+    btnApp.onclick = (e) => {
+      e.stopPropagation();
+      const willOpen = !appPanel.classList.contains("visible");
+      appPanel.classList.toggle("visible", willOpen);
+      btnApp.classList.toggle("open", willOpen);
+      if (willOpen && tgtPanel) { tgtPanel.classList.remove("visible"); btnTgt?.classList.remove("open"); }
+    };
+  }
+
+  if (btnTgt && tgtPanel) {
+    btnTgt.onclick = (e) => {
+      e.stopPropagation();
+      const willOpen = !tgtPanel.classList.contains("visible");
+      tgtPanel.classList.toggle("visible", willOpen);
+      btnTgt.classList.toggle("open", willOpen);
+      if (willOpen && appPanel) { appPanel.classList.remove("visible"); btnApp?.classList.remove("open"); }
+    };
+  }
+
+  if (typeof map !== "undefined") {
+    map.on("click", () => {
+      if (tgtPanel && tgtPanel.classList.contains("visible")) {
+        tgtPanel.classList.remove("visible");
+        btnTgt?.classList.remove("open");
+      }
+    });
+  }
+
+  const origRenderTargets = window.renderTargetsAndVectors;
+  if (typeof origRenderTargets === "function") {
+    window.renderTargetsAndVectors = function() {
+      origRenderTargets();
+      if (tgtBadge && btnTgt) {
+        const cnt = Array.isArray(targets) ? targets.length : 0;
+        tgtBadge.textContent = "ЦЕЛИ (" + cnt + ")";
+        const myId = typeof getMyMogId === "function" ? getMyMogId() : null;
+        const hasMyAssign = myId && Array.isArray(targets) && targets.some(t => t.assignedMogId === myId);
+        btnTgt.classList.toggle("alert", !!hasMyAssign);
+      }
+    };
+  }
+})();

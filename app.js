@@ -614,6 +614,7 @@ renderAll();
       }
     });
     btn.style.top = (Math.round(maxBottom) + 12) + "px";
+    btn.style.right = (window.innerWidth > window.innerHeight) ? "276px" : "12px";
   }
   setTimeout(placeBelowTopPanel, 250);
   window.addEventListener("resize", placeBelowTopPanel);
@@ -702,6 +703,10 @@ renderAll();
     if (typeof e.webkitCompassHeading === "number") heading = e.webkitCompassHeading;
     else if (e.alpha !== null) heading = (360 - e.alpha) % 360;
     if (heading === null || isNaN(heading)) return;
+    const scrAngle = (screen.orientation && typeof screen.orientation.angle === "number")
+      ? screen.orientation.angle
+      : (typeof window.orientation === "number" ? window.orientation : 0);
+    heading = (heading + scrAngle + 360) % 360;
 
     let diff = ((heading - currentHeading + 540) % 360) - 180;
     currentHeading = (currentHeading + diff * 0.25 + 360) % 360;
@@ -970,4 +975,242 @@ renderAll();
     }
     return origFetch.apply(this, arguments);
   };
+})();
+// === ВСТРОЕННЫЙ МОДУЛЬ ГОЛОСОВОЙ РАЦИИ (PTT) ===
+(function initEmbeddedPttModule() {
+  const PTT_FB_URL = "https://" + "nebo22-default-rtdb." + "firebaseio." + "com/ptt_rooms/";
+  const MAX_REC_SEC = 20;
+  const MAX_HISTORY = 15;
+
+  let mediaStream = null, mediaRecorder = null, audioChunks = [], recStartTs = 0, recTimer = null;
+  let audioCtx = null, playedIds = new Set(), playQueue = [], isPlaying = false, firstSync = true;
+  let lastPttRoom = "", pttPollTimer = null, isPttPolling = false, lastPttResetTs = 0;
+
+  const btnPtt = document.getElementById("btnPttMain");
+  const pttFabLbl = document.getElementById("pttFabLbl");
+  const btnHistory = document.getElementById("btnPttHistory");
+  const pttCount = document.getElementById("pttCount");
+  const pttModal = document.getElementById("pttModal");
+  const btnCloseModal = document.getElementById("btnClosePttModal");
+  const pttStatusLine = document.getElementById("pttStatusLine");
+  const pttMsgList = document.getElementById("pttMsgList");
+
+  if (!btnPtt) return;
+
+  window.addEventListener("orientationchange", () => setTimeout(() => { if (typeof map !== "undefined") map.invalidateSize(); }, 250));
+  window.addEventListener("resize", () => { if (typeof map !== "undefined") map.invalidateSize(); });
+
+  btnHistory.onclick = () => { pttModal.style.display = (pttModal.style.display === "flex") ? "none" : "flex"; };
+  btnCloseModal.onclick = () => { pttModal.style.display = "none"; };
+
+  function getMyCallsign() {
+    if (currentRole === "cmd") return "КОМАНДИР";
+    const id = getMyMogId();
+    return id ? ("МОГ-" + id) : "АБОНЕНТ";
+  }
+
+  function playPttTone(f1, f2, dur = 0.1) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(f1, audioCtx.currentTime);
+      if (f2) osc.frequency.setValueAtTime(f2, audioCtx.currentTime + dur * 0.5);
+      gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(); osc.stop(audioCtx.currentTime + dur + 0.01);
+    } catch (e) {}
+  }
+
+  function enqueuePlayback(msgObj, domEl) { playQueue.push({ msg: msgObj, el: domEl }); processQueue(); }
+
+  function processQueue() {
+    if (isPlaying || playQueue.length === 0) return;
+    isPlaying = true;
+    const { msg, el } = playQueue.shift();
+
+    btnPtt.classList.add("receiving");
+    pttFabLbl.textContent = "ПРИЁМ";
+    pttStatusLine.textContent = "🔊 Говорит " + msg.sender + " (" + msg.dur + "с)...";
+    if (typeof hintText !== "undefined") hintText.textContent = "📻 Рация: говорит " + msg.sender + "...";
+    if (el) el.classList.add("playing");
+
+    playPttTone(1100, 850, 0.09);
+
+    let audioUrl = "";
+    try {
+      const rawB64 = Array.isArray(msg.audio) ? msg.audio : msg.audio;
+      const bin = atob(rawB64), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      audioUrl = URL.createObjectURL(new Blob([bytes], { type: msg.mime || "audio/webm" }));
+    } catch (e) {}
+
+    const audio = new Audio(audioUrl);
+    const finish = () => {
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      if (el) el.classList.remove("playing");
+      btnPtt.classList.remove("receiving");
+      pttFabLbl.textContent = "PTT";
+      isPlaying = false;
+      if (playQueue.length === 0) {
+        pttStatusLine.textContent = netRoom ? ("Канал " + netRoom + " • Готов к приёму") : "Подключитесь в меню «📡 Связь»";
+      }
+      processQueue();
+    };
+    audio.onended = finish; audio.onerror = finish;
+    setTimeout(() => { audio.play().catch(finish); }, 100);
+  }
+  async function pollPtt() {
+    if (!netRoom || !netRoomHash || isPttPolling) return;
+    if (lastPttRoom !== netRoomHash) {
+      lastPttRoom = netRoomHash;
+      playedIds.clear(); playQueue = []; firstSync = true;
+      pttMsgList.innerHTML = ""; pttCount.textContent = "0";
+      pttStatusLine.textContent = "Канал " + netRoom + " • Ожидание эфира";
+    }
+    isPttPolling = true;
+    try {
+      const res = await fetch(PTT_FB_URL + netRoomHash + ".json?t=" + Date.now());
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data === null || (data && data.resetTs && data.resetTs > lastPttResetTs)) {
+        if (data && data.resetTs) lastPttResetTs = data.resetTs;
+        playedIds.clear(); playQueue = [];
+        pttMsgList.innerHTML = ""; pttCount.textContent = "0";
+        return;
+      }
+      const msgsObj = (data && data.msgs) ? data.msgs : {};
+      const keys = Object.keys(msgsObj).sort();
+      const myName = getMyCallsign();
+
+      for (const k of keys) {
+        if (playedIds.has(k)) continue;
+        playedIds.add(k);
+        const dec = await CryptoSync.decryptNode({ enc: msgsObj[k] }, netRoom);
+        if (!dec || !dec.audio) continue;
+
+        const isMine = (dec.sender === myName);
+        const row = document.createElement("div");
+        row.className = "ptt-row" + (isMine ? " mine" : "");
+        row.innerHTML = '<div><b>' + dec.sender + '</b> <span style="color:#94a3b8;font-size:10px;">' + dec.time + ' • ' + dec.dur + 'с</span></div>';
+        const btnRep = document.createElement("button");
+        btnRep.className = "btn"; btnRep.style.padding = "3px 7px"; btnRep.textContent = "▶";
+        btnRep.onclick = () => enqueuePlayback(dec, row);
+        row.appendChild(btnRep);
+        pttMsgList.appendChild(row);
+        pttMsgList.scrollTop = pttMsgList.scrollHeight;
+        pttCount.textContent = String(pttMsgList.children.length);
+
+        if (!firstSync && !isMine) enqueuePlayback(dec, row);
+      }
+      firstSync = false;
+    } catch (e) {} finally { isPttPolling = false; }
+  }
+
+  async function sendVoice(blob, durSec, mimeType) {
+    pttStatusLine.textContent = "⏳ Отправка голоса (" + durSec + "с)...";
+    const b64 = await new Promise((resolve) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result.split(","));
+      r.readAsDataURL(blob);
+    });
+    const now = new Date();
+    const timeStr = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0") + ":" + String(now.getSeconds()).padStart(2, "0");
+    const msgId = Date.now() + "_" + Math.floor(100 + Math.random() * 900);
+    const encObj = await CryptoSync.encryptObj({ sender: getMyCallsign(), time: timeStr, dur: durSec, mime: mimeType, audio: b64 }, netRoom);
+
+    try {
+      await fetch(PTT_FB_URL + netRoomHash + "/msgs/" + msgId + ".json", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(encObj.enc)
+      });
+      pttStatusLine.textContent = "✅ Передано (" + durSec + "с)";
+      const rList = await fetch(PTT_FB_URL + netRoomHash + "/msgs.json?shallow=true");
+      const keysObj = await rList.json();
+      if (keysObj) {
+        const ks = Object.keys(keysObj).sort();
+        while (ks.length > MAX_HISTORY) {
+          const oldK = ks.shift();
+          fetch(PTT_FB_URL + netRoomHash + "/msgs/" + oldK + ".json", { method: "DELETE" }).catch(() => {});
+        }
+      }
+      pollPtt();
+    } catch (e) { pttStatusLine.textContent = "❌ Ошибка отправки голоса"; }
+  }
+
+  function getMime() {
+    for (const t of ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"]) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return "";
+  }
+
+  async function startPtt(e) {
+    if (e) e.preventDefault();
+    if (!netRoom || !netRoomHash) {
+      if (typeof hintText !== "undefined") hintText.textContent = "⚠️ Сначала подключитесь к каналу в меню «📡 Связь»!";
+      return;
+    }
+    if (mediaRecorder && mediaRecorder.state === "recording") return;
+    try {
+      if (!mediaStream) {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      }
+    } catch (err) { alert("Разрешите доступ к микрофону для работы рации!"); return; }
+
+    playPttTone(880, 1320, 0.09);
+    if (navigator.vibrate) navigator.vibrate(40);
+
+    audioChunks = [];
+    const mime = getMime();
+    mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime, audioBitsPerSecond: 24000 }) : new MediaRecorder(mediaStream);
+    mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) audioChunks.push(ev.data); };
+    mediaRecorder.onstop = () => {
+      const dur = Math.max(1, Math.round((Date.now() - recStartTs) / 1000));
+      if (audioChunks.length > 0 && (Date.now() - recStartTs) >= 450) {
+        sendVoice(new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" }), dur, mediaRecorder.mimeType || "audio/webm");
+      }
+    };
+
+    recStartTs = Date.now();
+    mediaRecorder.start(150);
+    btnPtt.classList.add("active");
+    pttFabLbl.textContent = "00:00";
+
+    recTimer = setInterval(() => {
+      const sec = Math.floor((Date.now() - recStartTs) / 1000);
+      pttFabLbl.textContent = "00:" + String(sec).padStart(2, "0");
+      if (sec >= MAX_REC_SEC) stopPtt();
+    }, 250);
+  }
+
+  function stopPtt(e) {
+    if (e) e.preventDefault();
+    if (recTimer) { clearInterval(recTimer); recTimer = null; }
+    btnPtt.classList.remove("active");
+    pttFabLbl.textContent = "PTT";
+    if (mediaRecorder && mediaRecorder.state === "recording") { playPttTone(1040, 780, 0.09); mediaRecorder.stop(); }
+  }
+
+  btnPtt.addEventListener("pointerdown", startPtt);
+  btnPtt.addEventListener("pointerup", stopPtt);
+  btnPtt.addEventListener("pointercancel", stopPtt);
+  btnPtt.addEventListener("pointerleave", (e) => { if (e.buttons === 0 && mediaRecorder && mediaRecorder.state === "recording") stopPtt(e); });
+
+  const origClearBtn = document.getElementById("btnClearAll");
+  if (origClearBtn) {
+    origClearBtn.addEventListener("click", () => {
+      if (netRoomHash) {
+        const ts = Date.now();
+        lastPttResetTs = ts; playedIds.clear(); playQueue = [];
+        pttMsgList.innerHTML = ""; pttCount.textContent = "0";
+        fetch(PTT_FB_URL + netRoomHash + ".json", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resetTs: ts }) })
+          .then(() => setTimeout(() => fetch(PTT_FB_URL + netRoomHash + ".json", { method: "DELETE" }).catch(() => {}), 3500))
+          .catch(() => {});
+      }
+    });
+  }
+
+  pttPollTimer = setInterval(pollPtt, 1400);
 })();

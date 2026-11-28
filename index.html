@@ -12,11 +12,11 @@
     .dark-tiles { filter: invert(100%) hue-rotate(180deg) brightness(92%) contrast(90%); }
 
     .fab-circle {
-      width: 54px; height: 54px; border-radius: 50%;
+      height: 44px; padding: 0 13px; border-radius: 12px; white-space: nowrap;
       background: rgba(15, 23, 42, 0.92); color: #f8fafc;
-      border: 2px solid #38bdf8; box-shadow: 0 4px 14px rgba(0,0,0,0.6);
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      font-size: 10px; font-weight: 800; cursor: pointer; user-select: none; touch-action: none;
+      border: 1.5px solid #38bdf8; box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+      display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px;
+      font-size: 12px; font-weight: 800; cursor: pointer; user-select: none; touch-action: none;
     }
     .fab-circle:active { transform: scale(0.94); }
     .fab-circle.open { background: #1d4ed8; border-color: #93c5fd; }
@@ -68,10 +68,10 @@
     .vec-lbl { background:rgba(0,0,0,0.85); color:#ffd23f; border:1px solid #ffd23f; font-weight:800; font-size:11px; padding:1px 4px; border-radius:4px; }
     .vec-lbl-red { background:rgba(127,29,29,0.95); color:#fff; border:1px solid #ef4444; font-weight:800; font-size:11px; padding:1px 5px; border-radius:4px; }
     .ptt-dock { position: fixed; bottom: 12px; left: 12px; z-index: 1100; display: flex; align-items: center; gap: 8px; }
-    .ptt-fab { width: 64px; height: 64px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #1e293b, #0f172a); border: 2.5px solid #38bdf8; color: #f8fafc; font-size: 10px; font-weight: 800; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(0,0,0,0.65); touch-action: none; user-select: none; cursor: pointer; }
-    .ptt-fab.active { background: radial-gradient(circle at 35% 35%, #991b1b, #450a0a); border-color: #ef4444; box-shadow: 0 0 22px rgba(239,68,68,0.8); transform: scale(0.95); }
+    .ptt-fab { height: 50px; padding: 0 16px; border-radius: 14px; white-space: nowrap; background: linear-gradient(180deg, #1e293b, #0f172a); border: 2px solid #38bdf8; color: #f8fafc; font-size: 13px; font-weight: 800; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.65); touch-action: none; user-select: none; cursor: pointer; }
+    .ptt-fab.active { background: linear-gradient(180deg, #991b1b, #450a0a); border-color: #ef4444; box-shadow: 0 0 22px rgba(239,68,68,0.8); transform: scale(0.96); }
     .ptt-fab.receiving { border-color: #22c55e; box-shadow: 0 0 20px rgba(34,197,94,0.7); }
-    .ptt-log-btn { width: 46px; height: 46px; border-radius: 50%; background: rgba(15,23,42,0.92); color: #38bdf8; border: 1.5px solid #38bdf8; font-size: 11px; font-weight: 800; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.5); cursor: pointer; }
+    .ptt-log-btn { height: 50px; padding: 0 12px; border-radius: 14px; white-space: nowrap; background: rgba(15,23,42,0.92); color: #38bdf8; border: 1.5px solid #38bdf8; font-size: 12px; font-weight: 800; display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 5px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); cursor: pointer; }
     .ptt-modal { position: fixed; bottom: 84px; left: 12px; width: 280px; max-height: 55vh; z-index: 1150; background: rgba(15,19,24,0.97); border: 1.5px solid #38bdf8; border-radius: 12px; padding: 9px; display: none; flex-direction: column; gap: 6px; box-shadow: 0 8px 25px rgba(0,0,0,0.75); }
     .ptt-list { overflow-y: auto; display: flex; flex-direction: column; gap: 5px; max-height: 38vh; }
     .ptt-row { background: #161d26; border-left: 3px solid #38bdf8; border-radius: 5px; padding: 5px 8px; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
@@ -83,13 +83,13 @@
   <div id="map"></div>
   <div class="hud-top-left">
     <button id="btnToggleAppMenu" class="fab-circle" type="button" title="Управление приложением">
-      <span style="font-size:20px;">⚙️</span>
+      <span style="font-size:17px;">⚙️</span>
       <span>МЕНЮ</span>
     </button>
     <div id="hintText" class="status-pill">Инициализация...</div>
   </div>
   <button id="btnToggleTargetsMenu" class="fab-circle fab-targets" type="button" title="Управление целями">
-    <span style="font-size:19px;">🎯</span>
+    <span style="font-size:17px;">🎯</span>
     <span id="tgtFabBadge">ЦЕЛИ (0)</span>
   </button>
   <div class="top-bar">
@@ -149,7 +149,7 @@
   </div>
   <div class="ptt-dock">
     <button id="btnPttMain" class="ptt-fab" type="button" title="Удерживайте для голосовой передачи">
-      <span style="font-size:22px;">🎙</span>
+      <span style="font-size:17px;">🎙</span>
       <span id="pttFabLbl">PTT</span>
     </button>
     <button id="btnPttHistory" class="ptt-log-btn" type="button">📻 Эфир (<span id="pttCount">0</span>)</button>
@@ -164,7 +164,7 @@
   </div>
   <script>if("serviceWorker" in navigator){navigator.serviceWorker.register("./sw.js");}</script>
   <script src="leaflet.js"></script>
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>
 

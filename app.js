@@ -1214,3 +1214,5 @@ renderAll();
 
   pttPollTimer = setInterval(pollPtt, 1400);
 })();
+
+try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(e) {}

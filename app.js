@@ -571,7 +571,7 @@ async function syncFirebase(pushMine) {
 function broadcastState() { syncFirebase(true); }
 document.getElementById("btnOpenSync").onclick = () => document.getElementById("syncModal").style.display = "block";
 document.getElementById("btnCloseSync").onclick = () => document.getElementById("syncModal").style.display = "none";
-document.getElementById("btnConnectNet").onclick = async () => {
+document.getElementById("btnConnectNet").onclick = async () => { try { const ac = new (window.AudioContext || window.webkitAudioContext)(); ac.resume(); } catch(e) {}
   const room = document.getElementById("roomCode").value.trim().toUpperCase().replace(/[^A-ZА-Я0-9_-]/g, "");
   if (!room) return;
   if (syncTimer) clearInterval(syncTimer);
@@ -1041,7 +1041,7 @@ renderAll();
 
     let audioUrl = "";
     try {
-      const rawB64 = Array.isArray(msg.audio) ? msg.audio : msg.audio;
+      const rawB64 = Array.isArray(msg.audio) ? msg.audio[1] : msg.audio;
       const bin = atob(rawB64), bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       audioUrl = URL.createObjectURL(new Blob([bytes], { type: msg.mime || "audio/webm" }));
@@ -1113,7 +1113,7 @@ renderAll();
     pttStatusLine.textContent = "⏳ Отправка голоса (" + durSec + "с)...";
     const b64 = await new Promise((resolve) => {
       const r = new FileReader();
-      r.onload = () => resolve(r.result.split(","));
+      r.onload = () => resolve(r.result.split(",")[1]);
       r.readAsDataURL(blob);
     });
     const now = new Date();
